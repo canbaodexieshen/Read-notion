@@ -38,7 +38,7 @@ def main():
 
     # ② 筛选目标年份数据（用于正确的年度总计）
     year_data = filter_data_by_year(all_data, target_year)
-    year_total = int(sum(year_data.values()))
+    year_total = sum(year_data.values())
     print(f"📊 {target_year} 年总计：{year_total} 分钟（{ush.format_duration(year_total)}）")
 
     # ③ 生成底稿 SVG（由 github_heatmap CLI 按年份过滤）

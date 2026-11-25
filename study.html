@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的学习热力图</title>
+    <title>我的阅读热力图</title>
     <style>
         * {
             box-sizing: border-box;
@@ -117,14 +117,18 @@
 
         /* 智能反色滤镜：保留绿色方块的色彩感知，空白格正常显示 */
         body.dark-mode svg {
-            filter: invert(0.9) hue-rotate(180deg) brightness(1.1);
+            filter: none;
+        }
+        body.dark-mode svg > rect:first-of-type { fill: #191919; }
+        body.dark-mode svg text { fill: #ccc; }
+        body.dark-mode svg rect[fill="#ebedf0"] { fill: #2c2c2c;
         }
     </style>
 </head>
 <body>
     <header>
         <div class="controls-wrapper">
-            <select id="year-select">
+            <select id="year-select" aria-label="选择年份">
                 <option value="current">加载中...</option>
                 <option value="2025">2025</option>
                 <option value="2024">2024</option>
@@ -136,7 +140,7 @@
 
     <div id="heatmap-scroll-container">
         <div id="heatmap-content">
-            <p class="loading-text">正在加载学习热力图…</p>
+            <p class="loading-text">正在加载阅读热力图…</p>
         </div>
     </div>
 
@@ -151,7 +155,7 @@
 
         // 从 URL 参数读取初始图片地址
         const params          = new URLSearchParams(window.location.search);
-        const initialImageUrl = params.get('image');
+        const initialImageUrl = params.get('image') || 'study_heatmap/main.svg';
 
         // 智能解析 baseUrl（兼容多种目录结构）
         let baseUrl = '';
@@ -167,7 +171,7 @@
 
         // 加载函数（附时间戳防缓存）
         function loadHeatmap(url) {
-            content.innerHTML = '<p class="loading-text">正在同步学习记录…</p>';
+            content.innerHTML = '<p class="loading-text">正在同步阅读记录…</p>';
             const fetchUrl = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
 
             fetch(fetchUrl)
@@ -182,7 +186,18 @@
                 });
         }
 
-        if (initialImageUrl) loadHeatmap(initialImageUrl);
+        loadHeatmap(initialImageUrl);
+        fetch(`${baseUrl}study_heatmap/years.json`).then(r => {
+            if (!r.ok) throw new Error('年份清单加载失败');
+            return r.json();
+        }).then(data => {
+            yearSelect.replaceChildren(...data.years.map(year => {
+                const option = document.createElement('option');
+                option.value = year === data.current ? 'current' : String(year);
+                option.textContent = String(year);
+                return option;
+            }));
+        }).catch(() => {});
 
         // 年份切换
         yearSelect.addEventListener('change', e => {

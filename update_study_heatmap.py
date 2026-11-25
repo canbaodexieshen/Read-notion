@@ -32,7 +32,7 @@ def get_notion_data(token, database_id):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=60) as response:
                 res = json.loads(response.read())
                 for result in res.get("results", []):
                     props = result.get("properties", {})
@@ -42,9 +42,9 @@ def get_notion_data(token, database_id):
                     if props.get("日期") and props["日期"].get("date"):
                         date_val = props["日期"]["date"].get("start")
 
-                    # 读取"总时长"属性，兼容 formula / number / rollup 三种类型
+                    # 读取"总阅读时长"属性，兼容 formula / number / rollup 三种类型
                     val = 0
-                    val_prop = props.get("总时长")
+                    val_prop = props.get("总阅读时长")
                     if val_prop:
                         ptype = val_prop.get("type")
                         if ptype == "formula":
@@ -66,7 +66,7 @@ def get_notion_data(token, database_id):
 
                     if date_val and val > 0:
                         date_str = str(date_val).split("T")[0]
-                        data_dict[date_str] = data_dict.get(date_str, 0) + val
+                        data_dict[date_str] = data_dict.get(date_str, 0) + val / 60.0
 
                 has_more = res.get("has_more", False)
                 next_cursor = res.get("next_cursor")
@@ -89,31 +89,28 @@ def interpolate_color(color1, color2, factor):
 
 
 def get_color_for_minutes(val):
-    """
-    按学习时长（分钟）映射颜色：
-      0         → #ebedf0  (GitHub 灰，未学习)
-      1~240     → #E0E7FF → #60A5FA  (浅紫白 → 天蓝，0~4 小时)
-      241~480   → #60A5FA → #1E3A8A  (天蓝 → 深海蓝，4~8 小时)
-      >480      → #10B981 → #064E3B  (春意绿 → 深翠绿，8 小时以上)
-    """
-    if val == 0:
+    """GitHub 原生绿色：0、≤1h、≤2h、≤4h、>4h。"""
+    if val <= 0:
         return "#ebedf0"
-    elif val <= 240:
-        return interpolate_color("#E0E7FF", "#60A5FA", val / 240.0)
-    elif val <= 480:
-        return interpolate_color("#60A5FA", "#1E3A8A", (val - 240) / 240.0)
-    else:
-        return interpolate_color("#10B981", "#064E3B", min(1.0, (val - 480) / 240.0))
+    if val <= 60:
+        return "#9be9a8"
+    if val <= 120:
+        return "#40c463"
+    if val <= 240:
+        return "#30a14e"
+    return "#216e39"
 
 
 def format_duration(minutes):
     """将分钟数格式化为 'X小时Y分钟'（不足1小时只显示分钟）"""
-    h = int(minutes) // 60
-    m = int(minutes) % 60
+    seconds = round(minutes * 60)
+    h, remainder = divmod(seconds, 3600)
+    m, sec = divmod(remainder, 60)
+    suffix = f"{sec}秒" if sec else ""
     if h > 0:
-        return f"{h}小时{m}分钟"
+        return f"{h}小时{m}分钟{suffix}"
     else:
-        return f"{m}分钟"
+        return f"{m}分钟{suffix}"
 
 
 def process_svg_styling(file_path, data_dict, current_year, total_override=None):
@@ -124,7 +121,7 @@ def process_svg_styling(file_path, data_dict, current_year, total_override=None)
         content = f.read()
 
     # 1. 修正统计文字：将 "2026: 0 分钟" 替换为真实总和的时分格式
-    total_minutes = total_override if total_override is not None else int(sum(data_dict.values()))
+    total_minutes = total_override if total_override is not None else sum(v for d, v in data_dict.items() if d.startswith(str(current_year) + "-"))
     total_time_str = format_duration(total_minutes)
     content = re.sub(
         rf"({current_year}:\s*)[0-9\.]+\s*分钟",
@@ -183,7 +180,7 @@ def process_svg_styling(file_path, data_dict, current_year, total_override=None)
 def generate_heatmap(notion_token, database_id, year, me_name=None):
     """调用 github_heatmap CLI 生成底稿 SVG，返回输出路径"""
     if me_name is None:
-        me_name = os.getenv("HEATMAP_NAME", "学习热力图")
+        me_name = os.getenv("HEATMAP_NAME", "阅读热力图")
 
     command = [
         "github_heatmap",
@@ -191,7 +188,7 @@ def generate_heatmap(notion_token, database_id, year, me_name=None):
         "--notion_token", notion_token,
         "--database_id", database_id,
         "--date_prop_name", "日期",
-        "--value_prop_name", "总时长",
+        "--value_prop_name", "总阅读时长",
         "--unit", "分钟",
         "--year", str(year),
         "--me", me_name,
@@ -203,11 +200,9 @@ def generate_heatmap(notion_token, database_id, year, me_name=None):
     ]
 
     print(f"🚀 正在调用热力图引擎生成 {year} 年底稿...")
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError("热力图引擎生成失败，请检查 Notion 授权及字段")
 
     return "OUT_FOLDER/notion.svg"
 
@@ -226,22 +221,16 @@ def main():
     # ① 拉取 Notion 数据
     real_data = get_notion_data(notion_token, database_id)
 
-    # ② 生成底稿 SVG（颜色由后续步骤覆盖，此处只要求完整轨道和标题正确）
-    svg_path = generate_heatmap(notion_token, database_id, target_year)
-
-    if not os.path.exists(svg_path):
-        print(f"❌ 底稿 SVG 未生成，路径不存在: {svg_path}")
-        sys.exit(1)
-
-    # ③ 渐变着色 + 统计注入
-    print("🎨 正在执行渐变着色与统计注入...")
-    process_svg_styling(svg_path, real_data, target_year)
-
-    # ④ 移动到 study_heatmap/main.svg
+    years = sorted({int(d[:4]) for d in real_data} | {target_year})
     os.makedirs("study_heatmap", exist_ok=True)
-    dest = "study_heatmap/main.svg"
-    os.replace(svg_path, dest)
-    print(f"🎉 热力图已保存至 {dest}")
+    os.makedirs("old_heatmap", exist_ok=True)
+    for year in years:
+        svg_path = generate_heatmap(notion_token, database_id, year)
+        process_svg_styling(svg_path, real_data, year)
+        dest = "study_heatmap/main.svg" if year == target_year else f"old_heatmap/{year}.svg"
+        os.replace(svg_path, dest)
+    with open("study_heatmap/years.json", "w") as f:
+        json.dump({"current": target_year, "years": sorted(years, reverse=True)}, f)
 
 
 if __name__ == "__main__":
