@@ -123,6 +123,54 @@
         body.dark-mode svg text { fill: #ccc; }
         body.dark-mode svg rect[fill="#ebedf0"] { fill: #2c2c2c;
         }
+
+        /* 图例说明 */
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+            font-size: 11px;
+            color: #888;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .legend-box {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        body.dark-mode .legend {
+            color: #888;
+        }
+
+        /* iPad mouse/trackpad fallback for the SVG's native title tooltip. */
+        .ipad-heatmap-tooltip {
+            position: fixed;
+            z-index: 200;
+            pointer-events: none;
+            max-width: calc(100vw - 16px);
+            padding: 5px 9px;
+            border: 1px solid #d4d4d4;
+            border-radius: 6px;
+            background: #fff;
+            color: #222;
+            font-size: 12px;
+            line-height: 1.4;
+            overflow-wrap: anywhere;
+        }
+
+        body.dark-mode .ipad-heatmap-tooltip {
+            background: #2c2c2c;
+            border-color: #555;
+            color: #eee;
+        }
     </style>
 </head>
 <body>
@@ -130,12 +178,16 @@
         <div class="controls-wrapper">
             <select id="year-select" aria-label="选择年份">
                 <option value="current">加载中...</option>
-                <option value="2025">2025</option>
-                <option value="2024">2024</option>
-                <option value="2023">2023</option>
             </select>
             <button id="theme-toggle" title="切换深色/浅色模式">🌙</button>
-        </div>
+            <div class="legend" aria-label="阅读时长颜色图例">
+                <span>少</span>
+                <div class="legend-item" title="大于0至5分钟"><div class="legend-box" style="background: #9be9a8;"></div></div>
+                <div class="legend-item" title="大于5至15分钟"><div class="legend-box" style="background: #40c463;"></div></div>
+                <div class="legend-item" title="大于15至30分钟"><div class="legend-box" style="background: #30a14e;"></div></div>
+                <div class="legend-item" title="超过30分钟"><div class="legend-box" style="background: #216e39;"></div></div>
+                <span>多</span>
+            </div>     </div>
     </header>
 
     <div id="heatmap-scroll-container">
@@ -149,47 +201,73 @@
         const yearSelect  = document.getElementById('year-select');
         const themeToggle = document.getElementById('theme-toggle');
 
-        // 自动填入当前年份
+        // iPadOS can report a desktop Mac user agent; do not rely on hover media
+        // queries, since touch remains the primary input even with a mouse.
+        const hideIPadTooltip = (() => {
+            const isIPad = /iPad/.test(navigator.userAgent) ||
+                (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);
+            if (!isIPad) return () => {};
+
+            let tooltip = null;
+            let activeCell = null;
+            const hide = () => {
+                activeCell = null;
+                if (tooltip) tooltip.hidden = true;
+            };
+            const show = event => {
+                if (event.pointerType !== 'mouse' || event.buttons !== 0) {
+                    hide();
+                    return;
+                }
+                const cell = event.target.closest('rect');
+                if (!cell || !content.contains(cell)) { hide(); return; }
+                if (cell === activeCell) return;
+                const title = cell.querySelector('title');
+                if (!title || !title.textContent.trim()) { hide(); return; }
+                if (!tooltip) {
+                    tooltip = document.createElement('div');
+                    tooltip.className = 'ipad-heatmap-tooltip';
+                    tooltip.setAttribute('role', 'tooltip');
+                    document.body.appendChild(tooltip);
+                }
+                activeCell = cell;
+                tooltip.textContent = title.textContent.trim();
+                tooltip.hidden = false;
+                tooltip.style.left = '0px';
+                tooltip.style.top = '0px';
+                const bounds = cell.getBoundingClientRect();
+                const width = tooltip.offsetWidth;
+                const height = tooltip.offsetHeight;
+                const viewport = document.documentElement;
+                const left = Math.max(8, Math.min(bounds.left + bounds.width / 2 - width / 2,
+                    viewport.clientWidth - width - 8));
+                const above = bounds.top - height - 8;
+                const top = Math.max(8, Math.min(above >= 8 ? above : bounds.bottom + 8,
+                    viewport.clientHeight - height - 8));
+                tooltip.style.left = `${left}px`;
+                tooltip.style.top = `${top}px`;
+            };
+            // Delegate to the container: no per-cell listeners, polling or images.
+            content.addEventListener('pointerover', show, { passive: true });
+            content.addEventListener('pointermove', show, { passive: true });
+            content.addEventListener('pointerout', event => {
+                if (!activeCell || !event.relatedTarget || !activeCell.contains(event.relatedTarget)) hide();
+            }, { passive: true });
+            document.addEventListener('pointerdown', hide, { passive: true });
+            document.addEventListener('scroll', hide, { capture: true, passive: true });
+            document.addEventListener('visibilitychange', hide);
+            window.addEventListener('blur', hide);
+            window.addEventListener('resize', hide);
+            return hide;
+        })();
+
+        // 自动填入当前年份并动态生成年份选项
         const currentYear = new Date().getFullYear();
         yearSelect.options[0].text = `${currentYear}`;
 
-        // 从 URL 参数读取初始图片地址
-        const params          = new URLSearchParams(window.location.search);
-        const initialImageUrl = params.get('image') || 'study_heatmap/main.svg';
-
-        // 智能解析 baseUrl（兼容多种目录结构）
-        let baseUrl = '';
-        if (initialImageUrl) {
-            const markers = ['/study_heatmap/', '/old_heatmap/', '/OUT_FOLDER/'];
-            for (const m of markers) {
-                if (initialImageUrl.includes(m)) {
-                    baseUrl = initialImageUrl.split(m)[0] + '/';
-                    break;
-                }
-            }
-        }
-
-        // 加载函数（附时间戳防缓存）
-        function loadHeatmap(url) {
-            content.innerHTML = '<p class="loading-text">正在同步阅读记录…</p>';
-            const fetchUrl = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
-
-            fetch(fetchUrl)
-                .then(res => {
-                    if (!res.ok) throw new Error('该年份尚无存档文件');
-                    return res.text();
-                })
-                .then(svg => { content.innerHTML = svg; })
-                .catch(err => {
-                    content.innerHTML =
-                        `<p style="color:#888;text-align:center;font-size:12px;">${err.message}</p>`;
-                });
-        }
-
-        loadHeatmap(initialImageUrl);
-        fetch(`${baseUrl}study_heatmap/years.json`).then(r => {
-            if (!r.ok) throw new Error('年份清单加载失败');
-            return r.json();
+        fetch('study_heatmap/years.json').then(response => {
+            if (!response.ok) throw new Error('年份清单加载失败');
+            return response.json();
         }).then(data => {
             yearSelect.replaceChildren(...data.years.map(year => {
                 const option = document.createElement('option');
@@ -199,12 +277,37 @@
             }));
         }).catch(() => {});
 
+        // 加载函数 - 使用相对路径，无需计算 baseUrl
+        // GitHub Pages 部署时 index.html 在根目录，相对路径始终正确
+        function loadHeatmap(url) {
+            hideIPadTooltip();
+            content.innerHTML = '<p class="loading-text">正在加载阅读记录…</p>';
+            fetch(url)
+                .then(res => {
+                    if (!res.ok) throw new Error(`该年份尚无存档文件 (${res.status})`);
+                    return res.text();
+                })
+                .then(svg => {
+                    content.innerHTML = svg;
+                })
+                .catch(err => {
+                    content.innerHTML =
+                        `<p style="color:#888;text-align:center;font-size:12px;">${err.message}</p>`;
+                });
+        }
+
+        // 初始加载当前年热力图（相对路径）
+        const initialImageUrl = new URLSearchParams(location.search).get('image') || 'study_heatmap/main.svg';
+        loadHeatmap(initialImageUrl);
+
         // 年份切换
         yearSelect.addEventListener('change', e => {
             if (e.target.value === 'current') {
+                // 当前年：study_heatmap/main.svg
                 loadHeatmap(initialImageUrl);
             } else {
-                loadHeatmap(`${baseUrl}old_heatmap/${e.target.value}.svg`);
+                // 历史年份：old_heatmap/{年份}.svg
+                loadHeatmap(`old_heatmap/${e.target.value}.svg`);
             }
         });
 
@@ -222,7 +325,8 @@
 
         // 1. 自动感应系统设置
         const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-        // 兼容 Notion 嵌入：Notion 经常通过 URL 参数传递 theme=dark 
+        // 兼容 Notion 嵌入：Notion 经常通过 URL 参数传递 theme=dark
+        const params = new URLSearchParams(window.location.search);
         const isNotionDark = params.get('theme') === 'dark';
 
         applyTheme(systemPrefersDark.matches || isNotionDark); // 初始化

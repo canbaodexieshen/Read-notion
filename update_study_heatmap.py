@@ -5,6 +5,7 @@ import re
 import sys
 import urllib.request
 import json
+import xml.etree.ElementTree as ET
 
 
 def get_notion_data(token, database_id):
@@ -89,14 +90,14 @@ def interpolate_color(color1, color2, factor):
 
 
 def get_color_for_minutes(val):
-    """GitHub 原生绿色：0、≤1h、≤2h、≤4h、>4h。"""
+    """按实际阅读分布分档：0、≤5min、≤15min、≤30min、>30min。"""
     if val <= 0:
         return "#ebedf0"
-    if val <= 60:
+    if val <= 5:
         return "#9be9a8"
-    if val <= 120:
+    if val <= 15:
         return "#40c463"
-    if val <= 240:
+    if val <= 30:
         return "#30a14e"
     return "#216e39"
 
@@ -114,67 +115,35 @@ def format_duration(minutes):
 
 
 def process_svg_styling(file_path, data_dict, current_year, total_override=None):
-    """对底稿 SVG 执行渐变着色，并修正年度统计文字。
-    若提供 total_override，则用它覆盖左上角统计值（用于年度归档场景）。
-    """
-    with open(file_path, "r", encoding="utf-8") as f:
+    """统一更新 SVG，重复处理时也保持 XML、统计与提示正确。"""
+    namespace = "http://www.w3.org/2000/svg"
+    ET.register_namespace("", namespace)
+    with open(file_path, encoding="utf-8") as f:
         content = f.read()
-
-    # 1. 修正统计文字：将 "2026: 0 分钟" 替换为真实总和的时分格式
-    total_minutes = total_override if total_override is not None else sum(v for d, v in data_dict.items() if d.startswith(str(current_year) + "-"))
-    total_time_str = format_duration(total_minutes)
-    content = re.sub(
-        rf"({current_year}:\s*)[0-9\.]+\s*分钟",
-        rf"\g<1>{total_time_str}",
-        content,
+    # 兼容旧版本反复着色产生的重复根节点 style 属性。
+    content = re.sub(r' style="background-color:white;"', '', content)
+    root = ET.fromstring(content)
+    total = total_override if total_override is not None else sum(
+        v for d, v in data_dict.items() if d.startswith(f"{current_year}-")
     )
-
-    # 2. 对每个日期格子应用渐变颜色，同时更新 title 显示"日期 + 时长"
-    # 注意：github_heatmap 生成的日期格子格式为：
-    #   <rect fill="..." ...><title>YYYY-MM-DD</title></rect>
-    # 背景矩形是自闭合的 <rect ... />，不会被下面的正则匹配到，安全。
-    def rect_replacer(match):
-        rect_tag = match.group(0)
-        # 从 <title> 子标签中提取日期
-        date_match = re.search(r"<title>(\d{4}-\d{2}-\d{2})", rect_tag)
-        if not date_match:
-            return rect_tag  # 没有日期的格子（理论上不会出现）保持不变
-
-        date_str = date_match.group(1)
-        val = float(data_dict.get(date_str, 0))
-        color = get_color_for_minutes(val)
-        
-        # 更新 <title> 标签，显示"日期 - X小时Y分钟"（不足1小时只显示分钟）
-        if val > 0:
-            minutes_text = format_duration(val)
-        else:
-            minutes_text = "无记录"
-        rect_tag = re.sub(
-            r"<title>\d{4}-\d{2}-\d{2}[^<]*</title>",
-            f"<title>{date_str} - {minutes_text}</title>",
-            rect_tag,
-            count=1
-        )
-        
-        # 只替换第一个 fill 属性（格子本身的颜色）
-        return re.sub(r'fill="[^"]+"', f'fill="{color}"', rect_tag, count=1)
-
-    # 精确匹配：只处理包含 <title> 子标签的日期格子 rect
-    content = re.sub(
-        r'<rect\b[^>]*><title>.*?</title></rect>',
-        rect_replacer,
-        content,
-        flags=re.DOTALL,
-    )
-
-    # 3. 补充白色背景（若 SVG 本身没有背景矩形）
-    if 'id="background"' not in content:
-        content = content.replace("<svg ", '<svg style="background-color:white;" ', 1)
-
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-    print(f"🎨 着色完成：总计 {total_minutes} 分钟 / {len(data_dict)} 天")
+    for text in root.findall(f"{{{namespace}}}text"):
+        if (text.text or "").startswith(f"{current_year}:"):
+            text.text = f"{current_year}: {format_duration(total)}"
+    for rect in root.iter(f"{{{namespace}}}rect"):
+        title = rect.find(f"{{{namespace}}}title")
+        if title is None:
+            continue
+        match = re.match(r"\d{4}-\d{2}-\d{2}", title.text or "")
+        if not match:
+            continue
+        date = match.group(0)
+        minutes = float(data_dict.get(date, 0))
+        rect.set("fill", get_color_for_minutes(minutes))
+        rect.set("data-date", date)
+        rect.set("data-seconds", str(round(minutes * 60)))
+        title.text = f"{date} - {format_duration(minutes) if minutes > 0 else '无记录'}"
+    ET.ElementTree(root).write(file_path, encoding="utf-8", xml_declaration=True)
+    print(f"Styled {current_year}: {format_duration(total)}")
 
 
 def generate_heatmap(notion_token, database_id, year, me_name=None):
