@@ -150,7 +150,7 @@ def process_svg_styling(file_path, data_dict, current_year, total_override=None)
         else:
             minutes_text = "无记录"
         rect_tag = re.sub(
-            r"<title>\d{4}-\d{2}-\d{2}</title>",
+            r"<title>\d{4}-\d{2}-\d{2}[^<]*</title>",
             f"<title>{date_str} - {minutes_text}</title>",
             rect_tag,
             count=1
