@@ -1,6 +1,9 @@
 name: Study Heatmap Engine
 
 on:
+  push:
+    branches: [main]
+    paths: [update_study_heatmap.py, .github/workflows/study.yml]
   workflow_dispatch:
   schedule:
     - cron: "0 15 * * *" # 北京时间 23:00
