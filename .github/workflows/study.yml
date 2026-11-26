@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       TZ: Asia/Shanghai
       # 映射我们在 Secrets 里配置的两个密钥
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: "3.12"
       
       - name: Install Dependencies
         run: |

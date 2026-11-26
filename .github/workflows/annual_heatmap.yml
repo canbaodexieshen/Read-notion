@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   archive:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       TZ: Asia/Shanghai
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: "3.12"
 
       - name: Install Dependencies
         run: |
