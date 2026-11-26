@@ -2,7 +2,7 @@
 
 从 Notion 数据库的 `日期` 与 `总阅读时长`（公式数字，单位秒）生成 GitHub 风格阅读热力图。同一天的记录累加，悬停显示日期和精确时长。
 
-网页：https://canbaodexieshen.github.io/Study-notion-heatmap/
+网页：https://canbaodexieshen.github.io/Read-notion/
 
 保留原项目布局、年份切换和主题按钮。GitHub 原生绿色按实际阅读分布分档：0 为灰色；大于 0 至 5 分钟为 #9be9a8；大于 5 至 15 分钟为 #40c463；大于 15 至 30 分钟为 #30a14e；超过 30 分钟为 #216e39。采用固定阈值，年份之间可直接比较。控制栏、图例及 iPad 鼠标悬停提示沿用 Daily-summary-heatmap 页面。
 
